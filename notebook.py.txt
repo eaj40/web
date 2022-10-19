@@ -1,0 +1,74 @@
+https://hub.gke2.mybinder.org/user/fomightez-jupyter-desktop-server-1535luww/desktop/?token=7Wo3-FIgTiq4DkD7Bsa4MA
+
+https://mybinder.org/v2/gh/fomightez/jupyter-desktop-server/master?urlpath=desktop
+
+https://mybinder.org/v2/gh/DoableDanny/Realtime-chat-app-with-rooms/main
+
+https://hub.gke2.mybinder.org/user/freecodecamp-freecodecamp-h9p03ocm/lab
+
+
+https://mybinder.org/v2/gh/adrianhajdin/project_chat_application/master
+
+
+def main(args):
+    NUM_JOBS = 12
+    seed_everything(42)
+    os.makedirs(args.output, exist_ok=True)
+    df = pd.read_csv(os.path.join(args.input, "train_folds.csv"))
+
+    train_df = df[df["kfold"] != args.fold].reset_index(drop=True)  # .head(100)
+    valid_df = df[df["kfold"] == args.fold].reset_index(drop=True)  # .head(100)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+
+    training_samples = prepare_data(train_df, tokenizer, args, num_jobs=NUM_JOBS)
+    valid_samples = prepare_data(valid_df, tokenizer, args, num_jobs=NUM_JOBS)
+
+    valid_samples = list(sorted(valid_samples, key=lambda d: len(d["input_ids"])))
+
+    train_dataset = FeedbackDataset(training_samples, args.max_len, tokenizer)
+    valid_dataset = FeedbackDataset(valid_samples, args.max_len, tokenizer)
+
+    num_train_steps = int(len(train_dataset) / args.batch_size / args.accumulation_steps * args.epochs)
+    n_gpu = torch.cuda.device_count()
+    num_train_steps /= n_gpu
+
+    collate_fn = Collate(tokenizer, args.max_len)
+
+    model = FeedbackModel(
+        model_name=args.model,
+        num_train_steps=num_train_steps,
+        learning_rate=args.lr,
+        num_labels=6,
+        steps_per_epoch=len(train_dataset) / args.batch_size,
+        tokenizer=tokenizer,
+    )
+
+    model = Tez(model)
+    es = EarlyStopping(
+        monitor="valid_mcrmse",
+        model_path=os.path.join(args.output, f"model_f{args.fold}.bin"),
+        patience=5,
+        mode="min",
+        delta=0.001,
+        save_weights_only=True,
+    )
+    config = TezConfig(
+        training_batch_size=args.batch_size,
+        validation_batch_size=args.valid_batch_size,
+        gradient_accumulation_steps=args.accumulation_steps,
+        epochs=args.epochs,
+        fp16=True,
+        valid_shuffle=False,
+        step_scheduler_after="batch",
+        num_jobs=4,
+    )
+    model.fit(
+        train_dataset,
+        valid_dataset=valid_dataset,
+        train_collate_fn=collate_fn,
+        valid_collate_fn=collate_fn,
+        config=config,
+        callbacks=[es],
+    )
+
